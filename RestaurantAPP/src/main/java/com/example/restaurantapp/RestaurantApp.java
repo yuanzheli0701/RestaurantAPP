@@ -432,24 +432,121 @@ public class RestaurantApp extends Application {
             cartButton.setText("🛒 Order (" + totalItems + ")");
         }
     }
-
     private void updatePrepTimeLabel() {
         if (prepTimeLabel == null) return;
 
-        int maxPrepTime = shoppingCart.keySet().stream()
-                .map(Dish::getPrepTime)
-                .map(s -> s.replace("m", ""))
-                .filter(s -> !s.equals("N/A"))
-                .mapToInt(Integer::parseInt)
-                .max().orElse(0);
+        // 1. 智能分组：将购物车拆分为 [前菜/饮料] 和 [主菜/甜点]
+        Map<Dish, Integer> starters = new HashMap<>();
+        Map<Dish, Integer> mains = new HashMap<>();
 
-        if (maxPrepTime > 0) {
-            prepTimeLabel.setText("🕒 Estimated Prep Time: " + maxPrepTime + " minutes");
+        shoppingCart.forEach((dish, qty) -> {
+            if (isStarter(dish)) {
+                starters.put(dish, qty);
+            } else {
+                mains.put(dish, qty);
+            }
+        });
+
+        // 2. 独立计算两组的“厨房制作工时” (Work Time)
+        // 这里计算的是：如果厨房只做这组菜，需要多久做完
+        int starterWorkTime = calculateGroupPrepTime(starters);
+        int mainWorkTime = calculateGroupPrepTime(mains);
+
+        // 3. 计算最终送达时间轴 (Timeline)
+        // 核心逻辑：利用客人吃前菜的时间 (Eating Gap) 来抵消主菜的制作时间
+        int eatingGap = 15; // 假设客人吃前菜至少需要 15 分钟
+
+        int starterArrival = starterWorkTime;
+        int mainArrival;
+
+        if (starterWorkTime == 0) {
+            // 场景 A: 没点前菜，主菜直接做
+            mainArrival = mainWorkTime;
+        } else if (mainWorkTime == 0) {
+            // 场景 B: 没点主菜，只显示前菜时间
+            mainArrival = 0;
         } else {
-            prepTimeLabel.setText("🕒 Estimated Prep Time: N/A");
+            // 场景 C: 前菜 + 主菜 (并行重叠模型)
+            // 公式：主菜送达 = 前菜送达 + Max(最小间隔, 主菜耗时 - 提前准备的并行量)
+
+            // 假设：主菜耗时的 40% 可以在前菜阶段或进食阶段并发完成 (如预处理、摆盘)
+            int concurrentOffset = (int)(mainWorkTime * 0.4);
+
+            // 计算主菜在前菜之后还需要多久才能好
+            // 如果主菜做得很快(小于吃前菜的时间)，那就等吃完(eatingGap)再上
+            // 如果主菜做得慢，那就取 (实际耗时 - 并行抵扣)
+            int effectiveMainDuration = Math.max(eatingGap, mainWorkTime - concurrentOffset);
+
+            mainArrival = starterArrival + effectiveMainDuration;
         }
+
+        // 4. 构建 UI 显示文本
+        StringBuilder sb = new StringBuilder("🕒 Est. Time: ");
+
+        if (starterWorkTime == 0 && mainWorkTime == 0) {
+            sb.append("N/A");
+        } else if (starterWorkTime > 0 && mainWorkTime == 0) {
+            sb.append(starterArrival).append(" mins");
+        } else if (starterWorkTime == 0 && mainWorkTime > 0) {
+            sb.append(mainArrival).append(" mins");
+        } else {
+            // 双阶段显示：Starters 25m ➜ Mains ~45m
+            sb.append("Starters ").append(starterArrival).append("m ➜ Mains ~").append(mainArrival).append("m");
+        }
+
+        prepTimeLabel.setText(sb.toString());
     }
 
+    /**
+     * 辅助方法：计算一组菜品（如所有主菜）的总制作时间
+     * 包含：批量效应（同一种菜多份） + 拥堵效应（不同菜品）
+     */
+    private int calculateGroupPrepTime(Map<Dish, Integer> items) {
+        if (items.isEmpty()) return 0;
+
+        // A. 计算每种单品的总耗时（应用批量折扣）
+        List<Integer> itemTimes = items.entrySet().stream()
+                .map(e -> {
+                    String s = e.getKey().getPrepTime().replace("m", "");
+                    if (s.equals("N/A")) return 0;
+
+                    int base = Integer.parseInt(s);
+                    int qty = e.getValue();
+
+                    // 批量算法：
+                    // 1份 = 100% 时间
+                    // 3份 = 100% + 40% + 40% = 180% 时间 (而不是 300%)
+                    // 系数 0.4 代表熟练厨房的边际成本
+                    return qty <= 1 ? base : (int)(base + base * 0.4 * (qty - 1));
+                })
+                .sorted()
+                .collect(Collectors.toList());
+
+        if (itemTimes.isEmpty()) return 0;
+
+        // B. 计算组内并行耗时
+        // 取最长的那道菜作为主线
+        int maxTime = itemTimes.get(itemTimes.size() - 1);
+
+        // 其他较快的菜品导致的主线拥堵延迟（拥堵系数 15%）
+        int congestionDelay = itemTimes.stream()
+                .limit(itemTimes.size() - 1)
+                .mapToInt(t -> (int)(t * 0.15))
+                .sum();
+
+        return maxTime + congestionDelay;
+    }
+
+    /**
+     * 辅助方法：定义哪些属于“第一阶段上桌”
+     */
+    private boolean isStarter(Dish d) {
+        String cat = d.getCategory();
+        return "Appetizer".equalsIgnoreCase(cat) ||
+                "Beverage".equalsIgnoreCase(cat) ||
+                "Soup".equalsIgnoreCase(cat) ||
+                "Salad".equalsIgnoreCase(cat);
+    }
     private HBox createSummaryRow(String label, double val, boolean isTotal) {
         HBox row = new HBox();
         Label l = new Label(label);
