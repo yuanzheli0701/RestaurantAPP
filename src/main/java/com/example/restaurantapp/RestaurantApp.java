@@ -639,17 +639,35 @@ public class RestaurantApp extends Application {
         r.getChildren().addAll(t, d, b); s.setScene(new Scene(r, 450, 300)); s.show();
     }
 
+    // 在 RestaurantApp.java 中替换该方法
     private void processCheckout() {
-        if(shoppingCart.isEmpty()) return;
+        if (shoppingCart.isEmpty()) return;
 
+        // 1. 【核心联动逻辑】将购物车中的菜品转换成简单的字符串列表
+        // 例如：["Grilled Salmon x1", "Red Wine x2"]
+        List<String> orderItems = shoppingCart.entrySet().stream()
+                .map(entry -> entry.getKey().getName() + " x" + entry.getValue())
+                .collect(Collectors.toList());
+
+        // 2. 【核心联动逻辑】调用 OrderService 提交订单
+        // 这里我们假设桌号为 "08" (你可以后续添加桌号选择功能)
+        OrderService.addOrder("08", orderItems);
+
+        // 3. 计算总价用于弹窗显示
         double subtotal = shoppingCart.entrySet().stream()
                 .mapToDouble(entry -> entry.getKey().getPrice() * entry.getValue())
                 .sum();
+        double totalWithTax = subtotal * 1.05;
 
-        // 总价仅为 Subtotal + Tax (5%)
-        double t = subtotal * 1.05;
-        Alert a = new Alert(Alert.AlertType.INFORMATION); a.setTitle("Order Confirmed"); a.setHeaderText("Payment Successful!"); a.setContentText("Total Charged: €" + String.format("%.2f", t) + ". Your order is being prepared!"); a.showAndWait();
+        // 4. 弹出确认提示
+        Alert a = new Alert(Alert.AlertType.INFORMATION);
+        a.setTitle("Order Confirmed");
+        a.setHeaderText("Sent to Kitchen!");
+        a.setContentText("Total Charged: €" + String.format("%.2f", totalWithTax) +
+                "\nYour order has been sent to the chef.");
+        a.showAndWait();
 
+        // 5. 清空购物车并刷新界面
         shoppingCart.clear();
         refreshCartUI();
     }
